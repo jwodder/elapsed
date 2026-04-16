@@ -148,6 +148,7 @@ impl FormatPiece {
                 let mut divisor = 1_000_000_000 / 10;
                 for _ in 0..*precision {
                     let d;
+                    #[allow(clippy::manual_checked_ops)]
                     if divisor > 0 {
                         d = frac / divisor;
                         frac %= divisor;
