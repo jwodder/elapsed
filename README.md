@@ -45,7 +45,7 @@ instead.
 Options
 -------
 
-- `-f <TEMPLATE>`, `--format <TEMPLATE>` — Use the given format template for
+- `-f TEMPLATE`, `--format TEMPLATE` — Use the given format template for
   rendering the time in the status line.  Templates may contain the following
   specifiers & escape sequences:
 
@@ -63,7 +63,7 @@ Options
 
     The default template is "`Elapsed: %H:%M:%S`."
 
-- `-r <INT>`, `--refresh <INT>` — Update the status line after every `<INT>`
+- `-r INT`, `--refresh INT` — Update the status line after every `INT`
   milliseconds [default: 1000 (once per second)]
 
 - `-t`, `--total` — Leave the total elapsed time behind after the command finishes
