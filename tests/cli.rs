@@ -4,6 +4,7 @@ use nix::{
     unistd::Pid,
 };
 use std::io::{Seek, Write};
+use std::num::NonZeroU16;
 use std::process::ExitStatus;
 use std::time::Duration;
 use tokio::{
@@ -13,8 +14,8 @@ use tokio::{
 
 static SCRIPTS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/scripts");
 
-const SCREEN_WIDTH: u16 = 24;
-const SCREEN_HEIGHT: u16 = 80;
+const SCREEN_WIDTH: NonZeroU16 = NonZeroU16::new(24).unwrap();
+const SCREEN_HEIGHT: NonZeroU16 = NonZeroU16::new(80).unwrap();
 
 const STARTUP_WAIT: Duration = Duration::from_millis(100);
 // GitHub Actions' macOS runners have speed issues, so we need to wait a little
@@ -50,7 +51,10 @@ struct TestScreen {
 impl TestScreen {
     fn spawn(cmd: pty_process::Command) -> Result<TestScreen, pty_process::Error> {
         let (pty, pts) = pty_process::open()?;
-        pty.resize(pty_process::Size::new(SCREEN_WIDTH, SCREEN_HEIGHT))?;
+        pty.resize(pty_process::Size::new(
+            SCREEN_WIDTH.get(),
+            SCREEN_HEIGHT.get(),
+        ))?;
         let p = cmd.spawn(pts)?;
         let parser = vt100::Parser::new(SCREEN_WIDTH, SCREEN_HEIGHT, 0);
         Ok(TestScreen { pty, p, parser })
