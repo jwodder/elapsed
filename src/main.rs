@@ -14,7 +14,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncRead, ReadBuf},
     process::{Child, ChildStderr, ChildStdout, Command},
-    time::{Interval, interval},
+    time::{Interval, interval, timeout},
 };
 
 const READ_BUFFER_SIZE: usize = 2048;
@@ -300,22 +300,14 @@ impl Elapsing {
                     if self.stdout_is_tty {
                         self.statline.clear()?;
                     }
-                    if let Some(line) = r.map_err(Error::ReadStdout)? {
-                        self.stdout.lock().write_all(&line).map_err(Error::Write)?;
-                    } else {
-                        stdout_eof = true;
-                    }
+                    stdout_eof = write_lines(r, &mut self.pout, &mut self.stdout, Error::ReadStdout).await?;
                     if self.stdout_is_tty {
                         self.statline.print()?;
                     }
                 }
                 r = self.perr.next_line(), if !stderr_eof => {
                     self.statline.clear()?;
-                    if let Some(line) = r.map_err(Error::ReadStderr)? {
-                        self.stderr.lock().write_all(&line).map_err(Error::Write)?;
-                    } else {
-                        stderr_eof = true;
-                    }
+                    stderr_eof = write_lines(r, &mut self.perr, &mut self.stderr, Error::ReadStderr).await?;
                     self.statline.print()?;
                 }
                 r = self.p.wait(), if exit_code.is_none() => {
@@ -337,6 +329,37 @@ impl Elapsing {
                 }
             }
         }
+    }
+}
+
+/// Writes `first` (the result of a `lines.next_line()` call that has already
+/// completed) to `out`, followed by any further lines that are available
+/// without waiting for more output, so that a burst of output is written in
+/// one go and the status line only needs to be redrawn once afterwards.
+///
+/// Returns `Ok(true)` if EOF was reached.
+async fn write_lines<R, W>(
+    first: io::Result<Option<Vec<u8>>>,
+    lines: &mut ByteLines<R>,
+    out: &mut W,
+    read_err: fn(io::Error) -> Error,
+) -> Result<bool, Error>
+where
+    R: AsyncRead + Unpin,
+    W: Write,
+{
+    let mut next = first;
+    loop {
+        match next.map_err(read_err)? {
+            Some(line) => out.write_all(&line).map_err(Error::Write)?,
+            None => return Ok(true),
+        }
+        // A zero-duration timeout polls the future once and only gives up if
+        // it is still pending, i.e., if no more output is ready right now.
+        next = match timeout(Duration::ZERO, lines.next_line()).await {
+            Ok(r) => r,
+            Err(_) => return Ok(false),
+        };
     }
 }
 
@@ -730,6 +753,46 @@ mod tests {
             assert_eq!(lines.next_line().await.unwrap().unwrap(), b"Hello!\n");
             assert_eq!(lines.next_line().await.unwrap().unwrap(), b"Goodbye!\n");
             assert_eq!(lines.next_line().await.unwrap(), None);
+        }
+    }
+
+    mod write_lines {
+        use super::*;
+        use tokio_test::io::Builder;
+
+        // A burst of output that is already available must be written in a
+        // single call (so that the status line is only redrawn once for the
+        // whole burst), and the call must not wait for further output.
+        #[tokio::test]
+        async fn batch_written_in_one_call() {
+            let mut lines = ByteLines::new(
+                Builder::new()
+                    .read(b"one\n")
+                    .read(b"two\n")
+                    .read(b"three\n")
+                    .build(),
+            );
+            let mut out = Vec::new();
+            let first = lines.next_line().await;
+            let eof = write_lines(first, &mut lines, &mut out, Error::ReadStdout)
+                .await
+                .unwrap();
+            // The mock reports EOF once its scripted reads are exhausted, so
+            // the batch ends at EOF rather than at a pending read.
+            assert!(eof);
+            assert_eq!(out, b"one\ntwo\nthree\n");
+        }
+
+        #[tokio::test]
+        async fn batch_reaches_eof() {
+            let mut lines = ByteLines::new(Builder::new().read(b"one\ntwo\n").build());
+            let mut out = Vec::new();
+            let first = lines.next_line().await;
+            let eof = write_lines(first, &mut lines, &mut out, Error::ReadStdout)
+                .await
+                .unwrap();
+            assert!(eof);
+            assert_eq!(out, b"one\ntwo\n");
         }
     }
 }
